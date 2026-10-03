@@ -1,6 +1,8 @@
 # Server Action on a stale PPR page logs `Error: Unexpected end of form`
 
-A minimal reproduction for Next.js 16.3.8 (still the same code in 16.4.0-canary.58).
+A minimal reproduction for Next.js 16.3.8, the current `latest`.
+
+This is [vercel/next.js#96519](https://github.com/vercel/next.js/issues/96519), fixed on canary by [vercel/next.js#96640](https://github.com/vercel/next.js/pull/96640) and not reproducible with 16.4.0-canary.58. The fix has not been backported to 16.3.x, so 16.3.8 is still affected.
 
 With `cacheComponents` enabled, posting a Server Action to a partially prerendered page whose cached entry is stale makes the server log
 
@@ -56,9 +58,17 @@ Tracing `Readable.prototype.pipe` on the request confirms it: on a stale entry t
 
 This reproduction makes the entry stale with a short `cacheLife`, but a short `cacheLife` is not needed. When the stored entry was written by another process, such as another instance sharing a custom `cacheHandler`, the reading process's `cacheControls` do not know the path, and `IncrementalCache.calculateRevalidate` falls back to revalidating after one second. On a multi-instance deployment with a shared cache, this path is therefore reached routinely.
 
-## A change that stops it
+## Fixed on canary
 
-Not scheduling the background revalidation from a Server Action request removes both the error and the `MaxListenersExceededWarning` in this reproduction:
+[vercel/next.js#96640](https://github.com/vercel/next.js/pull/96640) gives the App Page route module a separate `prerender` operation and makes a forced static render, which is what this background revalidation is, use it instead of `render`. With 16.4.0-canary.58 the background revalidation is still scheduled from the Server Action request, but the multipart body is piped once per request and nothing is logged:
+
+```sh
+npm install next@16.4.0-canary.58
+npm run build
+npm run repro   # Not reproduced: no `Unexpected end of form` in the server log.
+```
+
+A narrower change for 16.3.x would be not to schedule the background revalidation from a Server Action request at all. Applied to 16.3.8 it also removes both the error and the `MaxListenersExceededWarning`:
 
 ```diff
                if (
@@ -70,11 +80,9 @@ Not scheduling the background revalidation from a Server Action request removes 
                ) {
 ```
 
-The stale entry is still revalidated by the next request that is not a Server Action (a navigation or a document request). An alternative would be to keep the revalidation but render it without the action, from a request that no longer carries `Next-Action` or its body.
-
 ## Environment
 
-- Next.js 16.3.8 (also checked against the code in 16.4.0-canary.58)
+- Next.js 16.3.8 (reproduces); 16.4.0-canary.58 (does not reproduce)
 - React 19.3.0
 - Node.js 24.21.0
 - `next build` (Turbopack) and `next start`
